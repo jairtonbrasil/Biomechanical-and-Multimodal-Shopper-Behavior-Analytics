@@ -1,0 +1,56 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python bytecode, packaging, and tool caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+/build/
+/dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Jupyter temporary files (keep notebooks versioned)
+.ipynb_checkpoints/
+.virtual_documents/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+/.aws/
+
+# Downloaded model weights and exported inference engines
+*.pt
+*.pth
+*.onnx
+*.engine
+/.hsemotion/
+
+# Downloaded footage and generated video, at any directory depth
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.part
+*.ytdl
+
+# Generated inference and analytics outputs
+/runs/
+/outputs/
+/notebooks/runs/
+/notebooks/outputs/
+*.log
+
+# Operating system temporary files
+.DS_Store
+Thumbs.db

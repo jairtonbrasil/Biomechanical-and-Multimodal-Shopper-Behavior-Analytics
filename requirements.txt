@@ -1,0 +1,28 @@
+# Dependencies for notebooks/shopper_behavior.ipynb.
+# Python 3.14; install with: .venv/bin/python -m pip install -r requirements.txt
+# FFmpeg is a system executable (already installed), not a pip dependency.
+
+# Numerical analysis, tables, plots, and shelf geometry
+numpy==2.5.4
+pandas==3.0.6
+scipy==1.18.1
+matplotlib==3.11.2
+shapely==2.2.0
+
+# Video processing, YOLO pose estimation, and ByteTrack
+opencv-python==5.0.0.93
+torch==2.14.1
+torchvision==0.29.1
+ultralytics==8.4.183
+lap==0.5.13
+
+# Facial expression recognition (CPU ONNX inference, as used by HSEmotion)
+hsemotion-onnx==0.3.1
+onnx==1.23.2
+onnxruntime==1.31.0
+
+# Video download and interactive notebooks
+yt-dlp==2026.8.19
+ipython==9.17.1
+ipykernel==7.4.0
+jupyterlab==4.6.4
