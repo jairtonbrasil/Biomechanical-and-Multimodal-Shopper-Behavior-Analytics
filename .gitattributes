@@ -1,0 +1,9 @@
+* text=auto
+*.py text eol=lf
+*.md text eol=lf
+# Keep notebooks viewable while excluding them from repository language statistics.
+*.ipynb text eol=lf linguist-detectable=false
+*.yml text eol=lf
+*.mp4 binary
+*.gif binary
+*.png binary

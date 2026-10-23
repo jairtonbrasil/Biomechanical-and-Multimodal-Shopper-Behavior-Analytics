@@ -1,0 +1,157 @@
+name: shopper-analytics
+
+x-backend: &backend
+  build:
+    context: ./backend
+    target: runtime
+  env_file: .env
+  init: true
+  networks: [services]
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    kafka-init:
+      condition: service_completed_successfully
+    mediamtx:
+      condition: service_healthy
+
+services:
+  migrate:
+    <<: *backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: [alembic, upgrade, head]
+
+  postgres:
+    image: postgres:16.13-alpine
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME:-shopper_analytics}
+      POSTGRES_USER: ${DATABASE_USER:-shopper}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?Set DATABASE_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [services]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4.8-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    command:
+      - /bin/sh
+      - -ec
+      - 'exec redis-server --requirepass "$$REDIS_PASSWORD" --maxmemory 256mb --maxmemory-policy noeviction --save "" --appendonly no'
+    networks: [services]
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  kafka:
+    image: apache/kafka:4.1.2
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_LOG_RETENTION_HOURS: ${KAFKA_RETENTION_HOURS:-24}
+      KAFKA_LOG_SEGMENT_BYTES: 16777216
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks: [services]
+    healthcheck:
+      test: [CMD-SHELL, /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null 2>&1]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+
+  kafka-init:
+    image: apache/kafka:4.1.2
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - >-
+        exec /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092
+        --create --if-not-exists --topic "$${TOPIC}"
+        --partitions "$${PARTITIONS}" --replication-factor 1
+        --config max.message.bytes="$${MAX_MESSAGE_BYTES}"
+    environment:
+      TOPIC: ${KAFKA_OBSERVATIONS_TOPIC:-retail.frame-observations}
+      PARTITIONS: ${KAFKA_PARTITIONS:-3}
+      MAX_MESSAGE_BYTES: ${KAFKA_MAX_MESSAGE_BYTES:-262144}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks: [services]
+
+  mediamtx:
+    image: bluenviron/mediamtx:1.21.2-ffmpeg
+    volumes:
+      - ./infrastructure/mediamtx.yml:/mediamtx.yml:ro
+    networks: [services]
+    healthcheck:
+      test: [CMD-SHELL, wget -q -O /dev/null http://127.0.0.1:9997/v3/paths/list]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    <<: *backend
+    ports:
+      - '127.0.0.1:${API_PORT:-8000}:8000'
+    command: [uvicorn, app.main:app, --host, 0.0.0.0, --port, '8000', --no-access-log]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=10)"]
+      interval: 10s
+      timeout: 12s
+      retries: 10
+
+  vision-worker:
+    <<: *backend
+    profiles: [verification]
+    command: [python, -m, workers.preflight, vision]
+
+  temporal-worker:
+    <<: *backend
+    profiles: [verification]
+    command: [python, -m, workers.preflight, temporal]
+
+  tests:
+    <<: *backend
+    profiles: [verification]
+    build:
+      context: ./backend
+      target: test
+    environment:
+      RUN_INTEGRATION_TESTS: '1'
+    command: [pytest, -v, -p, 'no:cacheprovider']
+
+networks:
+  services:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  kafka-data:

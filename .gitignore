@@ -27,6 +27,8 @@ htmlcov/
 !.env.example
 !.env.*.example
 /.aws/
+/.agents/
+/.codex/
 
 # Downloaded model weights and exported inference engines
 *.pt
@@ -44,13 +46,32 @@ htmlcov/
 *.part
 *.ytdl
 
+# Public README demonstrations; keep these paths available for Git versioning.
+!/docs/media/retail-store-processed.mp4
+!/docs/media/aisle-closeup-processed.mp4
+!/docs/media/retail-store-preview.gif
+!/docs/media/aisle-closeup-preview.gif
+!/docs/media/retail-store-heatmaps.png
+!/docs/media/retail-store-kinematics.png
+!/docs/media/aisle-closeup-heatmaps.png
+!/docs/media/aisle-closeup-kinematics.png
+
 # Generated inference and analytics outputs
 /runs/
 /outputs/
 /notebooks/runs/
 /notebooks/outputs/
 *.log
+*.dump
+*.backup
 
 # Operating system temporary files
 .DS_Store
 Thumbs.db
+
+/AGENT.md
+/PRD/
+
+# Local execution records; public operations and contracts live in docs/.
+/docs/stage-1-operations.md
+/docs/stage-1-validation.md

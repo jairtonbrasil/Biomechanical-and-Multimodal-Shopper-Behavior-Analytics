@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=75,<83"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shopper-analytics-backend"
+version = "0.1.0"
+description = "Asynchronous infrastructure for multimodal shopper analytics"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.34,<1",
+    "pydantic>=2.11,<3",
+    "pydantic-settings>=2.7,<3",
+    "sqlalchemy[asyncio]>=2.0.38,<2.1",
+    "asyncpg>=0.30,<1",
+    "redis>=5.2,<7",
+    "aiokafka>=0.12,<0.15",
+    "alembic>=1.14,<2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3,<10", "pytest-asyncio>=0.25,<2", "httpx>=0.28,<1", "ruff>=0.11,<1"]
+
+[tool.setuptools.packages.find]
+include = ["app*", "workers*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["integration: requires the Compose infrastructure and explicit opt-in"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
