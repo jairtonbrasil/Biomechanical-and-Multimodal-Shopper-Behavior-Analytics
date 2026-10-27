@@ -155,9 +155,9 @@ For three landmarks `A`, `B`, `C`, the angle at `B` is:
 
 $$
 \theta(A,B,C) = \frac{180}{\pi}\arccos\left(
-\operatorname{clip}\left[
-\frac{(A-B)\cdot(C-B)}{\|A-B\|_2\|C-B\|_2},-1,1
-\right]\right)
+\min\left(1,\max\left(-1,
+\frac{(A-B)\cdot(C-B)}{\|A-B\|_2\|C-B\|_2}
+\right)\right)\right)
 $$
 
 The elbow angle uses `(shoulder, elbow, wrist)`. The shoulder angle uses
