@@ -1,10 +1,12 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from redis.exceptions import RedisError
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -15,6 +17,7 @@ from app.core.resources import open_resources
 from app.middleware.limits import OperationalLimits
 from app.repositories.errors import EntityNotFoundError, InvalidReferenceError, VersionConflictError
 from app.routers.assets import router as asset_router
+from app.routers.playback import router as playback_router
 from app.routers.runtime import router as runtime_router
 
 logger = logging.getLogger(__name__)
@@ -46,6 +49,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.add_middleware(OperationalLimits)
     application.include_router(asset_router)
     application.include_router(runtime_router)
+    application.include_router(playback_router)
+    application.mount(
+        "/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static"
+    )
 
     async def domain_error(request: Request, error: Exception) -> JSONResponse:
         if isinstance(error, EntityNotFoundError):

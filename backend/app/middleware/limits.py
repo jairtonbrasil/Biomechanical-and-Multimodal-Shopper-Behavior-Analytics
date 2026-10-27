@@ -52,18 +52,28 @@ class OperationalLimits:
         except TimeoutError:
             await self.reject(send, 408, "Request body deadline exceeded")
             return
-        if settings.api_rate_limit_per_minute and settings.app_environment != "test":
+        media_request = "/hls/" in scope["path"]
+        quota = (
+            settings.media_rate_limit_per_minute
+            if media_request
+            else settings.api_rate_limit_per_minute
+        )
+        if quota and settings.app_environment != "test":
             peer = (scope.get("client") or ("unknown", 0))[0]
             identifier = hashlib.sha256(peer.encode()).hexdigest()
             try:
                 redis = scope["app"].state.resources.redis
                 count = await redis.client.eval(
-                    RATE_LIMIT, 1, redis.key("channel", f"rate:{identifier}")
+                    RATE_LIMIT,
+                    1,
+                    redis.key(
+                        "channel", f"{'media-rate' if media_request else 'rate'}:{identifier}"
+                    ),
                 )
             except Exception:
                 await self.reject(send, 503, "Request quota service is unavailable")
                 return
-            if count > settings.api_rate_limit_per_minute:
+            if count > quota:
                 await self.reject(send, 429, "Request quota exceeded")
                 return
         consumed = False
@@ -77,11 +87,13 @@ class OperationalLimits:
 
         async def secure_send(message: Message) -> None:
             if message["type"] == "http.response.start":
-                message["headers"] = [
-                    *message.get("headers", []),
-                    (b"x-content-type-options", b"nosniff"),
-                    (b"cache-control", b"no-store"),
-                ]
+                headers = list(message.get("headers", []))
+                names = {name.lower() for name, _ in headers}
+                if b"x-content-type-options" not in names:
+                    headers.append((b"x-content-type-options", b"nosniff"))
+                if b"cache-control" not in names:
+                    headers.append((b"cache-control", b"no-store"))
+                message["headers"] = headers
             await send(message)
 
         await self.app(scope, bounded_receive, secure_send)

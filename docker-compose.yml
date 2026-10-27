@@ -109,6 +109,7 @@ services:
   mediamtx:
     image: bluenviron/mediamtx:1.21.2-ffmpeg
     environment:
+      MTX_HLSCDNSECRET: ${MEDIAMTX_READ_PASSWORD:?Generate media credentials}
       MTX_AUTHINTERNALUSERS_0_USER: any
       MTX_AUTHINTERNALUSERS_0_IPS: 127.0.0.1,::1
       MTX_AUTHINTERNALUSERS_0_PERMISSIONS_0_ACTION: api
@@ -118,13 +119,13 @@ services:
       MTX_AUTHINTERNALUSERS_2_USER: media-reader
       MTX_AUTHINTERNALUSERS_2_PASS: ${MEDIAMTX_READ_PASSWORD:?Generate media credentials}
       MTX_AUTHINTERNALUSERS_2_PERMISSIONS_0_ACTION: read
-      MTX_AUTHINTERNALUSERS_2_PERMISSIONS_0_PATH: demo/retail
+      MTX_AUTHINTERNALUSERS_2_PERMISSIONS_0_PATH: '~^demo/(retail|iprox)$$'
       MTX_AUTHINTERNALUSERS_2_PERMISSIONS_1_ACTION: read
       MTX_AUTHINTERNALUSERS_2_PERMISSIONS_1_PATH: '~^cameras/[0-9a-f-]+$$'
       MTX_AUTHINTERNALUSERS_3_USER: demo-publisher
       MTX_AUTHINTERNALUSERS_3_PASS: ${MEDIAMTX_PUBLISH_PASSWORD:?Generate media credentials}
       MTX_AUTHINTERNALUSERS_3_PERMISSIONS_0_ACTION: publish
-      MTX_AUTHINTERNALUSERS_3_PERMISSIONS_0_PATH: demo/retail
+      MTX_AUTHINTERNALUSERS_3_PERMISSIONS_0_PATH: '~^demo/(retail|iprox)$$'
     volumes:
       - ./infrastructure/mediamtx.yml:/mediamtx.yml:ro
     networks: [services]
@@ -168,12 +169,34 @@ services:
       context: ./backend
       target: capture
     volumes:
-      - ${DEMO_VIDEO_FILE:-./notebooks/acti_retail_store_usa.mp4}:/demo/input.mp4:ro
+      - ${DEMO_VIDEO_FILE:-./notebooks/iprox_retail_aisle_hd.mp4}:/demo/input.mp4:ro
       - ./infrastructure/demo_publish.py:/app/demo_publish.py:ro
+      - ./infrastructure/demo_scenario.json:/app/demo_scenario.json:ro
     command: [python, /app/demo_publish.py]
     restart: unless-stopped
 
   vision-worker:
+    <<: *backend
+    profiles: [vision]
+    build:
+      context: ./backend
+      target: vision
+    environment:
+      VISION_CAMERA_ID: ${VISION_CAMERA_ID:-}
+    volumes:
+      - ./models:/models:ro
+      - ./outputs:/outputs
+      - reference-data:/var/lib/shopper/references:ro
+    command: [python, -m, workers.vision_streamer.main]
+
+  observation-inspector:
+    <<: *backend
+    profiles: [vision]
+    volumes:
+      - ./outputs:/outputs
+    command: [python, -m, workers.vision_streamer.inspect, --limit, '10', --timeout, '30']
+
+  vision-preflight:
     <<: *backend
     profiles: [verification]
     command: [python, -m, workers.preflight, vision]

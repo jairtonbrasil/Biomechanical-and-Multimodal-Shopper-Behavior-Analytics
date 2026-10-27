@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "camera_name": "IPROX_HD_RETAIL_AISLE_01",
+  "video_file": "notebooks/iprox_retail_aisle_hd.mp4",
+  "stream_path": "demo/iprox",
+  "shelves_file": "infrastructure/demo_shelves.json"
+}

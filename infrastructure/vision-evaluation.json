@@ -1,0 +1,74 @@
+{
+  "schema_version": "1.0",
+  "status": "DRAFT_REQUIRES_HUMAN_REVIEW",
+  "purpose": "Separate feature verification from held-out scientific accuracy evaluation.",
+  "splits": [
+    {
+      "source_file": "notebooks/acti_retail_store_usa.mp4",
+      "split": "calibration",
+      "start_seconds": 0,
+      "end_seconds": 15
+    },
+    {
+      "source_file": "notebooks/acti_retail_store_usa.mp4",
+      "split": "holdout",
+      "start_seconds": 15,
+      "end_seconds": 30
+    },
+    {
+      "source_file": "notebooks/iprox_retail_aisle_hd.mp4",
+      "split": "calibration",
+      "start_seconds": 0,
+      "end_seconds": 60
+    },
+    {
+      "source_file": "notebooks/iprox_retail_aisle_hd.mp4",
+      "split": "holdout",
+      "start_seconds": 60,
+      "end_seconds": 120
+    }
+  ],
+  "split_limitations": [
+    "Nonoverlapping time ranges do not establish independence across repeated people or scenes.",
+    "Holdout ranges must not be used to tune rules after labels are reviewed.",
+    "Source rights, clip availability, camera diversity and split suitability require human review."
+  ],
+  "labels_required": [
+    "person_and_camera_local_track",
+    "visible_keypoints_and_occlusion",
+    "stationary_or_moving_with_uncertain_option",
+    "visible_face_or_back_turned_head_direction",
+    "head_direction_shelf_target_or_ambiguous",
+    "same_arm_reach_candidate",
+    "bimanual_inspection_candidate",
+    "hand_to_head_posture",
+    "head_rotation_pattern",
+    "independently_visible_object_displacement_or_unavailable"
+  ],
+  "annotation_fields": [
+    "source_file",
+    "start_seconds",
+    "end_seconds",
+    "person_track_reference",
+    "label",
+    "hand_or_arm",
+    "shelf_reference",
+    "visibility",
+    "uncertainty",
+    "reviewer_reference"
+  ],
+  "reviewers": null,
+  "annotations": [],
+  "acceptance_targets": {
+    "event_precision": null,
+    "event_recall": null,
+    "event_boundary_error_ms": null,
+    "track_fragmentation": null,
+    "observable_coverage": null,
+    "keypoint_or_direction_error": null
+  },
+  "scientific_accuracy_evaluated": false,
+  "task_T051_accepted": false,
+  "unsupported_capabilities": ["verified_touch", "verified_pickup", "verified_return", "verified_emotion", "purchase"],
+  "notes": "Model scores and synthetic geometry tests do not substitute for reviewed labels or held-out accuracy measurements."
+}

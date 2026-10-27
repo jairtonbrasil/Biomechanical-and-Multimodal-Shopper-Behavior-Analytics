@@ -9,16 +9,18 @@ and facial or postural reactions around retail displays. The planned pipeline
 combines camera-local pose tracking, biomechanical indicators, temporal events,
 and per-display analytics.
 
-The infrastructure, persistence layer and operational camera/planogram APIs are
-implemented. A local RTSP demonstration captures a stable reference image and
-persists five shelf configurations from the notebook. The vision notebook is
-experimental; production inference, temporal processing, analytics and the
-dashboard remain under development. Head orientation is an
-attention proxy. Reaching does not establish touch, product removal, or purchase.
+The infrastructure, persistence layer, operational APIs and CPU vision worker are
+implemented. The worker reads RTSP through MediaMTX, runs YOLO11-pose/ByteTrack,
+extracts qualified geometric features and publishes observations to Kafka. A local
+demonstration produces an annotated clip, structured logs and delivery evidence.
+Temporal business processing, analytics and the dashboard remain under development.
+The scientific rules are experimental: head direction is an attention proxy, and
+reaching does not establish touch, product removal or purchase.
 
 [Demonstrations](#processed-video-demonstrations) ·
 [Scientific method](#scientific-method-from-pose-to-movement-indicators) ·
 [Infrastructure](#infrastructure-architecture) · [Quick start](#quick-start) ·
+[Run the vision worker](#run-and-review-the-vision-worker) ·
 [Database](#database-and-contracts) · [Next steps](#next-steps)
 
 ## Processed Video Demonstrations
@@ -250,7 +252,7 @@ The demonstration videos above are separate from the MERL dataset.
 ## Infrastructure Architecture
 
 The target system has four tiers. Docker Compose delivers the service foundation,
-persistence, configuration APIs and a dedicated reference-capture worker.
+persistence, configuration APIs, reference capture and an optional CPU vision worker.
 The notebook runs separately; it does not feed
 the broker, run the production workers or populate the application database.
 
@@ -262,7 +264,7 @@ flowchart TB
         Proxy[MediaMTX with FFmpeg]
     end
     subgraph Processing["Tier 2 - Inference and temporal processing"]
-        Vision[Vision worker - planned]
+        Vision[Vision worker - CPU inference]
         Kafka[Kafka KRaft - observation topic]
         Temporal[Temporal worker - planned]
     end
@@ -277,6 +279,9 @@ flowchart TB
     Capture[Reference capture worker]
     References[(Immutable reference images)]
     Migrate[Alembic migration job]
+    Inspector[Read-only Kafka inspector]
+    Browser[Local source player]
+    Preview[Annotated diagnostic clip]
 
     Camera -->|RTSP| Proxy
     API -->|reconcile versioned paths| Proxy
@@ -286,8 +291,12 @@ flowchart TB
     Proxy -->|internal RTSP| Capture
     Capture -->|immutable JPEG and metadata| References
     References -->|read-only access| API
-    Proxy -. RTSP stream .-> Vision
-    Vision -. versioned JSON observations .-> Kafka
+    Proxy -->|RTSP stream| Vision
+    Vision -->|versioned JSON observations| Kafka
+    Kafka -->|diagnostic read, no offset commits| Inspector
+    Vision -->|bounded local artifact| Preview
+    Proxy -->|internal HLS| API
+    API -->|same-origin HLS| Browser
     Kafka -. ordered consumption .-> Temporal
     Temporal -. committed business records .-> DB
     Temporal -. sliding windows and active state .-> Redis
@@ -309,10 +318,10 @@ framework, build image or Compose service yet.
 
 | Component | Implemented foundation | Planned operational responsibility |
 |---|---|---|
-| MediaMTX + FFmpeg | Authenticated internal RTSP proxy, reconciled camera paths and optional local video publisher | Add browser playback and bounded inference reconnects |
+| MediaMTX + FFmpeg | Internal RTSP proxy, reconciled paths, HLS playback and optional local publisher | Validate camera/site codecs and transport at deployment |
 | Reference capture | Separate FFmpeg worker, bounded Redis jobs, immutable JPEG/metadata in a named volume | Apply deployment-specific reference retention and backup policy |
-| Vision worker | Separate workspace and infrastructure preflight | Capture bounded RTSP streams, run pose/tracking/kinematics, and publish quality-qualified observations outside the API process |
-| Kafka KRaft | Broker, topic initialization, camera-keyed producer and manual-acknowledgement consumer helpers | Buffer lightweight observations and preserve partition order for temporal processing and retained-history recovery |
+| Vision worker | Bounded capture/reconnect, pinned CPU pose/tracker/face adapters, qualified features, Kafka publication and annotated diagnostics | Complete human-labeled scientific evaluation; add independently supported product evidence if approved |
+| Kafka KRaft | Broker/topic, active camera-keyed vision producer, read-only inspector and manual-acknowledgement helpers | Buffer lightweight observations and preserve partition order for temporal processing and retained-history recovery |
 | Temporal worker | Separate workspace and infrastructure preflight | Confirm interactions, segment attention/action/reaction episodes, commit results and project metrics |
 | Redis | Password-protected ephemeral service, reference queue, API rate limits and expiring configuration acknowledgements | Hold reconstructible track windows and active state; cache analytical responses |
 | PostgreSQL 16 | Eleven domain tables, validated JSONB, repositories, constraints, indexes and migrations | Remain the durable source for observations, business records, model/geometry provenance and analytical projections |
@@ -348,10 +357,11 @@ responses; browser clients will not connect directly to the database or broker.
 The Compose services are `postgres`, `redis`, `kafka`, `kafka-init`, `mediamtx`,
 `migrate`, `api` and `reference-capture`. The optional `demo` profile adds
 `demo-source`, which loops an original local video over authenticated RTSP.
-The `verification` profile additionally provides `tests`,
-`vision-worker` and `temporal-worker`; the worker commands currently exit after
-preflight checks. The API, migrations and preflights share the backend runtime
-image, while the notebook keeps its separate scientific environment.
+The `vision` profile adds the real `vision-worker` and read-only
+`observation-inspector`. The `verification` profile provides `tests`,
+`vision-preflight` and `temporal-worker`; the latter still performs infrastructure
+preflight only. The vision image has a separate CPU dependency lock and FFmpeg;
+model packages are excluded from the API image. The notebook remains independent.
 
 PostgreSQL readiness gates Alembic migration. Successful migration, Redis health,
 Kafka topic initialization and MediaMTX health gate API startup. PostgreSQL,
@@ -407,6 +417,172 @@ require a deployment-specific configuration.
 | `GET /api/v1/cameras/{id}/frame-zero` | Stable JPEG with dimensions, capture time and reference/source revision headers |
 | `POST /api/v1/cameras/{id}/frame-zero` | Explicit refresh after deactivating shelves and closing active interactions |
 | `GET /api/v1/cameras/{id}/runtime` | Safe desired worker configuration and proxy application status |
+| `GET /api/v1/cameras/{id}/playback`, `GET /api/v1/cameras/{id}/player` | HLS descriptor and local source-video player |
+| `GET /api/v1/cameras/{id}/hls/{asset}` | Bounded same-origin HLS playlists/segments; upstream credentials stay internal |
+
+## Run and Review the Vision Worker
+
+Use the original local iProx input, `notebooks/iprox_retail_aisle_hd.mp4`, with its
+five notebook ROI definitions and English shelf categories. The default camera is
+`IPROX_HD_RETAIL_AISLE_01`; `infrastructure/demo_scenario.json` binds its input,
+proxy path and shelf fixture together. The repository keeps source footage and model
+weights outside Git. The commands below reuse the same APIs and database geometry
+as the operational demonstration.
+
+```bash
+# Existing installation: append new settings without rotating service passwords.
+python3 scripts/configure_local.py --upgrade
+
+# Copy and verify existing YOLO/HSEmotion artifacts into ignored models/.
+python3 scripts/prepare_vision_models.py
+
+# Build the CPU worker, start services, configure the demo and verify the pipeline.
+python3 scripts/demo_stage4.py --build --max-frames 600 --max-seconds 120
+```
+
+If the weights are absent locally, the preparation script accepts `--pose-source`
+and `--face-source`. Its explicit `--download` option permits downloads from the
+pinned official sources in `infrastructure/vision-models.json`; checksums must match.
+The runtime never downloads models. The manifest selects the actual artifacts;
+legacy notebook/foundation path settings do not select a different model silently.
+The default iProx demo budget is 600 processed frames or 120 seconds so a short
+empty opening does not end the run before shoppers enter the scene.
+The reproducible CPU runtime uses Python 3.12, YOLO11s-pose, explicit ByteTrack and
+HSEmotion ONNX. GPU execution is not part of this validated image.
+
+The harness starts the diagnostic consumer before inference, verifies HLS and
+requires actual model observations to reach Kafka. On Linux it uses `setfacl` to
+give the image's non-root UID access to `outputs/stage4`; it does not make generated
+output directories world-writable. No frontend build or application login is needed.
+
+### What to Open
+
+The command prints the annotated video, JSON execution report, source player and log paths.
+No HTML report, SVG overlay or reference-image copy is generated by the demo scripts. Generated
+artifacts are under `outputs/stage4/` and remain ignored by Git:
+
+| Artifact | What it verifies |
+|---|---|
+| `run-*/annotated.mp4` | H.264 video with skeletons, track IDs, product/presence ROIs, candidate labels and per-frame timings |
+| `run-*/report.json` | Model/configuration IDs, capture counters, published observations, partition offsets and timing percentiles |
+| `run-*/observations.jsonl` | Bounded sample of validated observation envelopes, with complete geometry and model provenance |
+| `producer-*.jsonl` | Worker lifecycle, source/tracking/configuration boundaries, sampled acknowledgements and periodic summaries |
+| `consumer-*.jsonl` | Diagnostic receive events, topic/partition/offset and wall-clock observation age |
+| `inspected-*.jsonl` and matching `.summary.json` | Observations actually read back from Kafka and consumer-group offset status |
+| `verification.json` | Successful demo artifact paths, published count and local source-player URL |
+
+Open the printed `annotated.mp4` in a video player and check that skeletons follow people,
+product/presence polygons align with the scene, and IDs remain coherent while a
+track is visible. Missing measurements show `UNKNOWN` or null; the worker does not
+invent a neutral expression or a measurement from an occluded joint. The HLS player
+shows the original source stream. The processed clip is a separate worker artifact,
+with repeated samples holding the last frame to preserve elapsed capture timing.
+
+The run directory contains `annotated.mp4`, `report.json` and
+`observations.jsonl`. `latest.json` identifies the most recent run; `verification.json`
+links its producer/consumer logs and inspected Kafka samples. The operational setup
+writes only `outputs/stage3/verification.json`; the immutable reference image remains
+in the application's reference-storage volume.
+
+To inspect the most recent JSON report from the terminal:
+
+```bash
+python3 - <<'PYREPORT'
+import json
+from pathlib import Path
+root = Path("outputs/stage4")
+latest = json.loads((root / "latest.json").read_text())
+run = root / latest["run_directory"]
+print("Annotated video:", run / "annotated.mp4")
+print((run / "report.json").read_text())
+PYREPORT
+```
+
+### Read the Producer and Consumer Diagnostics
+
+```bash
+rg 'producer_acknowledged|vision_summary|vision_tracking_epoch' outputs/stage4/producer-*.jsonl
+rg 'observation_received|inspection_summary' outputs/stage4/consumer-*.jsonl
+
+# Read a bounded sample already in Kafka without changing business-group offsets.
+docker compose --profile vision run --rm observation-inspector   python -m workers.vision_streamer.inspect --from-beginning --limit 10 --timeout 30
+```
+
+Match `observation_id`, `camera_id`, `tracking_session_id`, frame sequence and
+partition/offset between the logs and JSON samples. Producer acknowledgements are
+sampled to bound logging volume; counters include every acknowledged observation.
+Kafka carries normalized evidence JSON, never video frames or face crops.
+
+| Measurement | Meaning |
+|---|---|
+| `capture_to_inference_age` | Time in the worker between receiving a decoded frame and starting its inference |
+| `inference` | Pose, optional face and feature-extraction work for the processed frame |
+| `producer_ack` | Publication time including any bounded retries until Kafka acknowledgement |
+| `capture_to_publish_ack` | Internal receive-to-acknowledgement delay; business persistence is not included |
+| `sampling_skips` | Source frames intentionally omitted by the sampling policy |
+| `overload_drops` | Sampled frames replaced in the single latest-frame slot while the worker is busy |
+| `observed_age_ms` | Inspector receive time minus observation time, assuming synchronized wall clocks |
+| `lag_offsets` | End offset minus committed next offset for the named business consumer group |
+
+The inspector is a **read-only diagnostic consumer**. It does not create business
+interactions, commit production offsets or fill analytical tables. Before Stage 5
+starts committing offsets, group lag is `null` with `UNCOMMITTED`, rather than zero.
+Local durations use monotonic clocks. Physical exposure-to-result latency remains
+unavailable without a validated camera timestamp mapping. Reports explicitly state
+that scientific acceptance is pending and pickup/return/touch are unsupported.
+
+### Test Reconnects, Cutovers and Broker Failure
+
+After a successful demo:
+
+```bash
+python3 scripts/verify_stage4_faults.py
+
+docker compose --profile verification run --build --rm tests
+```
+
+These live fault checks are optional manual verification, separate from the unit
+suite. The final code changes were verified with unit tests; the live fault
+sequence must be reviewed by the person running it.
+
+The fault script is restricted to the known five-shelf local demo. It temporarily
+stops/restores the video publisher, checks a new source/tracking epoch, applies the
+same polygons as a new ROI version and checks history/cutover isolation. It then
+stops/restores Kafka and verifies bounded retries, a failed worker exit and readiness
+recovery. It preserves polygon coordinates and records results under
+`outputs/stage4/faults/`. It deliberately advances one demo shelf's ROI version;
+this is a real configuration update, not a database reset.
+
+A download-free source fixture is also available:
+
+```bash
+python3 scripts/create_rtsp_fixture.py
+```
+
+This creates a 15-second H.264 test pattern for transport tests. It contains no
+people and cannot validate pose accuracy or the retail polygons. Set
+`DEMO_VIDEO_FILE=./outputs/stage4-fixture.mp4` when intentionally testing that input,
+then restore the iProx source before running the retail demonstration.
+
+### Extraction and Scientific Acceptance
+
+The worker evaluates reach on the **same arm**, uses the angle at the shoulder
+between shoulder-to-hip and shoulder-to-elbow vectors, and suppresses invalid scale
+instead of substituting bounding-box width. Motion is measured in projected
+shoulder-widths/second using event-time intervals; stationary detection needs a
+full valid 15-observation window. At the default 10 Hz sampling target, the POC's
+`0.048` threshold becomes `0.48 Ws/s`. These are explicitly versioned engineering
+conventions, not evidence that the thresholds are calibrated across cameras.
+
+Head direction is a heuristic 2D projection, without recovered depth or eye tracking.
+Facial classification requires a sufficiently visible, sharp face crop and records
+only supported mapped expressions. No qualifying crop means an unavailable result.
+The current evidence adapter explicitly disables contact, pickup and return;
+wrist entry alone cannot assert those actions.
+
+`infrastructure/vision-evaluation.json` defines disjoint review ranges and an
+annotation protocol. Human labels, reviewer acceptance and accuracy targets remain
+pending; no precision/recall result is fabricated from these demonstration runs.
 
 ## Database and Contracts
 
@@ -484,6 +660,21 @@ Host tests skip service integration unless explicitly enabled. The root
 `requirements.txt` and existing notebook environment are separate from the backend
 lockfiles; scientific/model runtime compatibility is validated independently.
 
+To run only unit tests locally, without opening any video or contacting the
+Compose services:
+
+```bash
+cd backend
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.lock
+.venv/bin/python -m pytest -q
+```
+
+Service integration tests skip unless `RUN_INTEGRATION_TESTS=1`. Model adapters are
+mocked in the unit suite; core tests skip optional NumPy/OpenCV cases when those
+packages are absent. To include those unit cases, install the separate vision lock
+in an isolated Python 3.12 environment. This still does not run source videos.
+
 The GitHub Actions workflow runs source checks, notebook publication checks, unit
 tests and Docker-backed integration tests on pushes and pull requests. It creates
 ephemeral credentials for its local services and does not run model inference or
@@ -513,46 +704,14 @@ docker-compose.yml   Local service orchestration
 
 ## Next Steps
 
-The next implementation is **the vision streamer and biomechanical
-engine**. Configuration and reference contracts now precede live processing.
-
-### Planned Processing Visibility
-
-The RTSP demo and persisted reference/ROIs are available now. Continuous AI
-processing and its producer/consumer diagnostics are the next delivery, rather
-than functionality demonstrated by the current static reference page.
-
-```mermaid
-flowchart LR
-    RTSP[Video through MediaMTX] --> Vision[Vision worker: pose, tracking and features]
-    Vision -->|lightweight JSON observations| Kafka[Kafka]
-    Kafka --> Temporal[Temporal consumer]
-    Temporal --> DB[(PostgreSQL business results)]
-    Vision -. approved local diagnostic clip .-> Preview[Pose, tracks, ROIs and timing overlay]
-```
-
-Stage 4 must include a bounded local annotated diagnostic clip from approved
-footage and structured producer logs. Stage 5 adds temporal consumer/persistence
-logs and consumer-group lag. Timing instrumentation belongs with those workers;
-Stage 6 consolidates it into operational interfaces.
-
-Required diagnostics distinguish capture-to-inference age, inference duration,
-producer acknowledgement latency, consumer processing/database/offset-commit
-durations and capture-to-durable-result latency. Kafka offset lag is reported per
-topic/partition/group separately from time delays. Periodic summaries include
-source/sampled/processed FPS, sampling skips versus overload drops, reconnects,
-throughput and latency percentiles. Correlation uses camera/session/observation,
-frame sequence, model/configuration revision and topic/partition/offset.
-
-Local stage durations use monotonic clocks. Cross-process wall-clock delays require
-clock synchronization. RTSP presentation timestamps alone do not establish physical
-camera-to-result latency; missing exposure-clock mapping must remain explicitly
-unavailable. Logs never contain frames, face crops or credential-bearing URLs.
+The next implementation is **Stage 5: the temporal consumer and durable business
+processing**. The vision producer and diagnostic inspection are implemented;
+interaction/episode consolidation and analytics remain pending.
 
 | Stage | Scope and current status | Completion evidence |
 |---|---|---|
 | Core APIs and planograms | Implemented: camera/shelf management, stable reference capture, geometry versions and proxy propagation | API integration tests, worker/control tests and reproducible RTSP/ROI visual demonstration |
-| Video and vision workers | Next: bounded inference capture/reconnect, pinned pose/tracker configuration and extraction of notebook algorithms; internal proxy paths are implemented | Qualified keypoints/scale, same-arm reach rules, explicit sampling cadence, unknown handling and measured accuracy on labeled footage |
+| Video and vision workers | Implemented: CPU inference, bounded RTSP/reconnect, qualified features, versioned Kafka observations, HLS and annotated diagnostics | Real model/RTSP/Kafka execution and fault tests; human-labeled scientific acceptance remains pending |
 | Temporal processing | Planned: interaction lifecycle, episodes, transaction-before-acknowledgement, deterministic redelivery handling and reconstruction | Entry/exit/loss boundary tests, supported-duration accounting, crash/rebalance fault tests and replay equivalence |
 | Analytics and live delivery | Planned: cache-first shelf rankings, coverage-aware visitors/funnels/heatmaps, WebSocket and observability | Correct window/cohort denominators, cache isolation, freshness/coverage metadata and measured latency/lag |
 | Frontend dashboard | Planned: framework selection, separate build/Compose service, playback, ROI editor and analytical views | Operator walkthroughs covering version conflicts, unavailable evidence, stale data and reconnects |
@@ -582,8 +741,8 @@ Named volumes retain PostgreSQL and Kafka data across `docker compose down`.
 Redis is ephemeral and must not be the sole source for business records. Automatic
 raw-data deletion is not enabled: replay and unique-track operations require
 verified retained-history coverage. Camera-local tracks do not identify people
-across cameras or restarts. No raw footage or face crops are stored by the current
-backend. Real-store ingestion and facial processing require a defined deployment
+across cameras or restarts. Face crops are not persisted. Bounded annotated diagnostic clips and observation
+samples are explicit local review outputs and remain outside Git. Real-store ingestion and facial processing require a defined deployment
 policy and access controls.
 
 ## License

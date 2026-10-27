@@ -7,3 +7,5 @@
 *.mp4 binary
 *.gif binary
 *.png binary
+
+/backend/app/static/hls.min.js linguist-vendored=true

@@ -41,13 +41,22 @@ async def observation_producer(settings: Settings) -> AsyncIterator[AIOKafkaProd
         max_request_size=settings.kafka_max_message_bytes,
         request_timeout_ms=settings.kafka_request_timeout_ms,
     )
+    failed = False
     try:
         async with asyncio.timeout(settings.kafka_request_timeout_ms / 1000):
             await producer.start()
         yield producer
+    except BaseException:
+        failed = True
+        raise
     finally:
-        async with asyncio.timeout(settings.kafka_request_timeout_ms / 1000):
-            await producer.stop()
+        try:
+            async with asyncio.timeout(settings.kafka_request_timeout_ms / 1000):
+                await producer.stop()
+        except Exception:
+            # A bounded cleanup failure must not replace the publication failure that caused it.
+            if not failed:
+                raise
 
 
 async def publish_observation(

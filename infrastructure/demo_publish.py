@@ -1,14 +1,19 @@
 """Publish a local, unannotated video as an authenticated demonstration camera."""
 
+import json
 import os
 import subprocess
 import time
+from pathlib import Path
 
 
 def main() -> None:
     source = os.environ.get("DEMO_VIDEO_PATH", "/demo/input.mp4")
     password = os.environ["MEDIAMTX_PUBLISH_PASSWORD"]
-    destination = f"rtsp://demo-publisher:{password}@mediamtx:8554/demo/retail"
+    scenario = json.loads(Path("/app/demo_scenario.json").read_text())
+    destination = (
+        f"rtsp://demo-publisher:{password}@mediamtx:8554/{scenario['stream_path']}"
+    )
     command = [
         "ffmpeg",
         "-nostdin",

@@ -23,9 +23,11 @@ class Settings(BaseSettings):
     app_environment: Literal["local", "test", "production"] = "local"
     api_request_max_bytes: int = Field(default=65536, ge=1024, le=1048576)
     api_rate_limit_per_minute: int = Field(default=240, ge=0, le=10000)
+    media_rate_limit_per_minute: int = Field(default=1800, ge=1, le=10000)
     rtsp_allowed_networks: tuple[str, ...] = ()
     rtsp_allowed_ports: tuple[int, ...] = (554, 8554, 322)
     mediamtx_api_url: str = "http://mediamtx:9997"
+    mediamtx_hls_url: str = "http://mediamtx:8888"
     mediamtx_api_password: SecretStr = Field(default="", repr=False)
     mediamtx_read_password: SecretStr = Field(default="", repr=False)
     mediamtx_publish_password: SecretStr = Field(default="", repr=False)
@@ -65,7 +67,28 @@ class Settings(BaseSettings):
     exit_tolerance_ms: int = Field(default=2000, gt=0)
     tracking_loss_tolerance_ms: int = Field(default=5000, gt=0)
     sampling_fps: float = Field(default=10, gt=0, le=60)
-    pose_model_path: Path = Path("/models/yolo11n-pose.pt")
+    vision_camera_id: str = ""
+    vision_frame_width: int = Field(default=1280, ge=320, le=1920)
+    vision_frame_height: int = Field(default=720, ge=240, le=1920)
+    vision_capture_timeout_seconds: float = Field(default=10, ge=1, le=30)
+    vision_reconnect_max_seconds: float = Field(default=10, ge=0.1, le=60)
+    vision_reconnect_attempts: int = Field(default=5, ge=1, le=100)
+    vision_confidence: float = Field(default=0.3, gt=0, le=1)
+    vision_image_size: int = Field(default=640, ge=320, le=1280)
+    vision_max_people: int = Field(default=32, ge=1, le=32)
+    vision_device: str = Field(default="cpu", pattern=r"^(cpu|[0-9])$")
+    vision_cpu_threads: int = Field(default=2, ge=1, le=32)
+    vision_max_frames: int = Field(default=300, ge=0, le=1000000)
+    vision_max_seconds: float = Field(default=120, ge=1, le=86400)
+    vision_summary_seconds: float = Field(default=5, ge=1, le=60)
+    vision_publish_timeout_seconds: float = Field(default=5, ge=0.1, le=30)
+    vision_publish_attempts: int = Field(default=3, ge=1, le=10)
+    vision_output_directory: Path = Path("/outputs/stage4")
+    vision_preview_enabled: bool = True
+    vision_preview_max_seconds: int = Field(default=60, ge=1, le=600)
+    vision_observation_sample_limit: int = Field(default=50, ge=0, le=1000)
+    vision_model_manifest: Path = Path("/models/manifest.json")
+    pose_model_path: Path = Path("/models/yolo11s-pose.pt")
     face_model_path: Path = Path("/models/hsemotion.onnx")
 
     @field_validator("database_password", "redis_password")

@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "pose": {
+    "filename": "yolo11s-pose.pt",
+    "sha256": "1060bda4a27012060eca246f9b2adeea22eabb045a1e58f8d229be29b7ebc2ba",
+    "source": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s-pose.pt"
+  },
+  "face": {
+    "filename": "enet_b0_8_best_vgaf.onnx",
+    "sha256": "fa07e841fd06c7a67ee651ea4e6e4a3a2bb5695f47b37a7da50492526f59c898",
+    "source": "https://github.com/HSE-asavchenko/face-emotion-recognition/raw/main/models/affectnet_emotions/onnx/enet_b0_8_best_vgaf.onnx"
+  }
+}

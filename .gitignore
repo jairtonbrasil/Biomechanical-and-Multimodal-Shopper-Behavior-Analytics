@@ -76,3 +76,6 @@ Thumbs.db
 /docs/stage-1-operations.md
 /docs/stage-1-validation.md
 /docs/*.md
+
+# Prepared, checksum-verified local model bundle
+/models/
