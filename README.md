@@ -9,9 +9,11 @@ and facial or postural reactions around retail displays. The planned pipeline
 combines camera-local pose tracking, biomechanical indicators, temporal events,
 and per-display analytics.
 
-The infrastructure and persistence layer are implemented. The vision notebook is
-experimental; camera management APIs, production inference, temporal processing,
-analytics, and the dashboard remain under development. Head orientation is an
+The infrastructure, persistence layer and operational camera/planogram APIs are
+implemented. A local RTSP demonstration captures a stable reference image and
+persists five shelf configurations from the notebook. The vision notebook is
+experimental; production inference, temporal processing, analytics and the
+dashboard remain under development. Head orientation is an
 attention proxy. Reaching does not establish touch, product removal, or purchase.
 
 [Demonstrations](#processed-video-demonstrations) ·
@@ -88,7 +90,6 @@ removal, verified emotion or purchase. The backend's stricter contracts require
 separate product evidence and explicit unknown/quality semantics. The notebook
 currently keeps its event tables in memory rather than writing to PostgreSQL.
 
-Source credits and export details are recorded in [media notes](docs/media/README.md).
 Third-party footage retains its original rights; the repository's MIT license
 applies to project code.
 
@@ -248,13 +249,14 @@ The demonstration videos above are separate from the MERL dataset.
 
 ## Infrastructure Architecture
 
-The target system has four tiers. Docker Compose currently delivers the service
-foundation and persistence layer. The notebook runs separately; it does not feed
+The target system has four tiers. Docker Compose delivers the service foundation,
+persistence, configuration APIs and a dedicated reference-capture worker.
+The notebook runs separately; it does not feed
 the broker, run the production workers or populate the application database.
 
 ```mermaid
 flowchart TB
-    Camera[Physical CCTV camera]
+    Camera[Allowed RTSP camera or local demo publisher]
 
     subgraph Video["Tier 1 - Video ingestion and distribution"]
         Proxy[MediaMTX with FFmpeg]
@@ -269,12 +271,21 @@ flowchart TB
         Redis[(Redis)]
     end
     subgraph Presentation["Tier 4 - Backend and presentation"]
-        API[FastAPI - health endpoints implemented]
+        API[FastAPI - camera and shelf APIs]
         Frontend[Frontend dashboard - planned]
     end
+    Capture[Reference capture worker]
+    References[(Immutable reference images)]
     Migrate[Alembic migration job]
 
-    Camera -. RTSP ingestion .-> Proxy
+    Camera -->|RTSP| Proxy
+    API -->|reconcile versioned paths| Proxy
+    API -->|camera and shelf configuration| DB
+    API -->|capture queue and configuration status| Redis
+    Redis -->|bounded capture jobs| Capture
+    Proxy -->|internal RTSP| Capture
+    Capture -->|immutable JPEG and metadata| References
+    References -->|read-only access| API
     Proxy -. RTSP stream .-> Vision
     Vision -. versioned JSON observations .-> Kafka
     Kafka -. ordered consumption .-> Temporal
@@ -288,7 +299,7 @@ flowchart TB
     API -->|readiness| Kafka
 ```
 
-Solid arrows represent implemented deployment/readiness paths. Dashed arrows
+Solid arrows represent implemented operational and deployment paths. Dashed arrows
 represent planned operational data paths. PostgreSQL, Redis, Kafka and MediaMTX
 are running infrastructure services; dashed links do not imply their business
 integrations are delivered. The frontend has a reserved workspace, with no selected
@@ -298,13 +309,14 @@ framework, build image or Compose service yet.
 
 | Component | Implemented foundation | Planned operational responsibility |
 |---|---|---|
-| MediaMTX + FFmpeg | Proxy service and health check; camera paths and media permissions are not provisioned | Share one upstream camera connection among worker/player consumers and provide authorized playback |
+| MediaMTX + FFmpeg | Authenticated internal RTSP proxy, reconciled camera paths and optional local video publisher | Add browser playback and bounded inference reconnects |
+| Reference capture | Separate FFmpeg worker, bounded Redis jobs, immutable JPEG/metadata in a named volume | Apply deployment-specific reference retention and backup policy |
 | Vision worker | Separate workspace and infrastructure preflight | Capture bounded RTSP streams, run pose/tracking/kinematics, and publish quality-qualified observations outside the API process |
 | Kafka KRaft | Broker, topic initialization, camera-keyed producer and manual-acknowledgement consumer helpers | Buffer lightweight observations and preserve partition order for temporal processing and retained-history recovery |
 | Temporal worker | Separate workspace and infrastructure preflight | Confirm interactions, segment attention/action/reaction episodes, commit results and project metrics |
-| Redis | Password-protected ephemeral service, namespaced state/cache access and bounded TTLs | Hold reconstructible track windows and active state; cache analytical responses |
+| Redis | Password-protected ephemeral service, reference queue, API rate limits and expiring configuration acknowledgements | Hold reconstructible track windows and active state; cache analytical responses |
 | PostgreSQL 16 | Eleven domain tables, validated JSONB, repositories, constraints, indexes and migrations | Remain the durable source for observations, business records, model/geometry provenance and analytical projections |
-| FastAPI backend | Async resource lifecycle, configuration and `/health/live` / `/health/ready` | Serve camera/shelf management, analytics and scoped WebSocket updates |
+| FastAPI backend | Camera/shelf CRUD, optimistic revisions, Frame(0), runtime configuration and health | Add analytics and WebSocket updates |
 | Frontend | Reserved `frontend/` workspace | Present live playback, a versioned ROI editor, shelf rankings, heatmaps, action/reaction timelines and funnels |
 
 ### Why Kafka, Redis and PostgreSQL Have Separate Roles
@@ -334,18 +346,19 @@ responses; browser clients will not connect directly to the database or broker.
 ### Compose Topology and Startup
 
 The Compose services are `postgres`, `redis`, `kafka`, `kafka-init`, `mediamtx`,
-`migrate` and `api`. The `verification` profile additionally provides `tests`,
+`migrate`, `api` and `reference-capture`. The optional `demo` profile adds
+`demo-source`, which loops an original local video over authenticated RTSP.
+The `verification` profile additionally provides `tests`,
 `vision-worker` and `temporal-worker`; the worker commands currently exit after
 preflight checks. The API, migrations and preflights share the backend runtime
 image, while the notebook keeps its separate scientific environment.
 
 PostgreSQL readiness gates Alembic migration. Successful migration, Redis health,
-Kafka topic initialization and MediaMTX health gate API startup. PostgreSQL and
-Kafka use named volumes; Redis is configured without persistence. Internal services
+Kafka topic initialization and MediaMTX health gate API startup. PostgreSQL,
+Kafka and reference images use named volumes; Redis has no persistence. Internal services
 stay on the Docker bridge, and only the API is published on host loopback. This
 single-node development setup does not deliver production high availability or
-public playback access. See [infrastructure operations](docs/infrastructure.md)
-for configuration, backup, migration and recovery procedures.
+public playback access.
 
 ## Requirements
 
@@ -367,7 +380,10 @@ docker compose ps -a
 curl --fail http://127.0.0.1:8000/health/ready
 ```
 
-Configuration generation creates independent local database and Redis passwords
+For an existing installation, use `python3 scripts/configure_local.py --upgrade`
+before rebuilding. It appends missing settings without replacing existing secrets.
+
+Configuration generation creates independent database, Redis and media passwords
 without displaying them. Keep `.env` private. The `migrate` service applies
 `alembic upgrade head`; the API and verification services wait for it to succeed.
 A successful one-shot migration container exits with code 0.
@@ -381,6 +397,16 @@ Only the API is published, on `127.0.0.1:8000`. To use another local port, run
 and media protocols have no published host ports. The single-node broker and local
 bridge are a development topology; production access, transport and capacity
 require a deployment-specific configuration.
+
+## Operational API and Visual Verification
+
+| Routes | Behavior |
+|---|---|
+| `GET/POST /api/v1/cameras`, `GET/PUT /api/v1/cameras/{id}` | Camera management; responses omit stream URLs and credentials |
+| `GET/POST /api/v1/shelves`, `GET/PUT /api/v1/shelves/{id}` | Versioned product/presence polygons; stale updates return 409 |
+| `GET /api/v1/cameras/{id}/frame-zero` | Stable JPEG with dimensions, capture time and reference/source revision headers |
+| `POST /api/v1/cameras/{id}/frame-zero` | Explicit refresh after deactivating shelves and closing active interactions |
+| `GET /api/v1/cameras/{id}/runtime` | Safe desired worker configuration and proxy application status |
 
 ## Database and Contracts
 
@@ -425,13 +451,9 @@ edits preserve previous versions in JSONB instead of overwriting history.
 
 Migration `0002_english_names` brings existing databases to the English naming
 standard without recreating domain records. Observation contract 2.0 uses English
-keys throughout. Existing installations require the coordinated update described
-in [migration operations](docs/infrastructure.md#startup-and-migrations).
-
-See [data contracts](docs/data-contracts.md) for envelope versioning, null semantics,
-model dependencies, deterministic identifiers, geometry history, and retention
-eligibility. See [infrastructure operations](docs/infrastructure.md) for migration,
-inspection, backup and recovery commands.
+keys throughout. Coordinate existing writers/readers with migration deployment.
+The validated schemas define envelope versioning, null semantics, model dependencies,
+deterministic identifiers, geometry history and retention eligibility.
 
 ```bash
 # Inspect the migration revision and detect metadata drift.
@@ -479,9 +501,9 @@ backend/
   app/repositories/  Persistence, geometry versioning and history eligibility
   migrations/        Alembic environment and versioned migrations
   tests/             Unit and isolated service integration tests
-  workers/           Vision/temporal workspaces and infrastructure preflight
+  workers/           Reference capture, vision/temporal workspaces and preflight
 frontend/            Reserved dashboard workspace
-infrastructure/      MediaMTX configuration
+infrastructure/      MediaMTX configuration, demo publisher and reviewed ROI fixtures
 docs/                Public technical documentation
   media/             Reviewed processed exports and animated previews
 notebooks/           Experimental vision and biomechanical analysis
@@ -491,14 +513,46 @@ docker-compose.yml   Local service orchestration
 
 ## Next Steps
 
-The immediate implementation priority is **Stage 3: camera management and a
-versioned digital planogram API**. The sequence below keeps configuration and
-evidence contracts in place before connecting the POC to live processing.
+The next implementation is **the vision streamer and biomechanical
+engine**. Configuration and reference contracts now precede live processing.
+
+### Planned Processing Visibility
+
+The RTSP demo and persisted reference/ROIs are available now. Continuous AI
+processing and its producer/consumer diagnostics are the next delivery, rather
+than functionality demonstrated by the current static reference page.
+
+```mermaid
+flowchart LR
+    RTSP[Video through MediaMTX] --> Vision[Vision worker: pose, tracking and features]
+    Vision -->|lightweight JSON observations| Kafka[Kafka]
+    Kafka --> Temporal[Temporal consumer]
+    Temporal --> DB[(PostgreSQL business results)]
+    Vision -. approved local diagnostic clip .-> Preview[Pose, tracks, ROIs and timing overlay]
+```
+
+Stage 4 must include a bounded local annotated diagnostic clip from approved
+footage and structured producer logs. Stage 5 adds temporal consumer/persistence
+logs and consumer-group lag. Timing instrumentation belongs with those workers;
+Stage 6 consolidates it into operational interfaces.
+
+Required diagnostics distinguish capture-to-inference age, inference duration,
+producer acknowledgement latency, consumer processing/database/offset-commit
+durations and capture-to-durable-result latency. Kafka offset lag is reported per
+topic/partition/group separately from time delays. Periodic summaries include
+source/sampled/processed FPS, sampling skips versus overload drops, reconnects,
+throughput and latency percentiles. Correlation uses camera/session/observation,
+frame sequence, model/configuration revision and topic/partition/offset.
+
+Local stage durations use monotonic clocks. Cross-process wall-clock delays require
+clock synchronization. RTSP presentation timestamps alone do not establish physical
+camera-to-result latency; missing exposure-clock mapping must remain explicitly
+unavailable. Logs never contain frames, face crops or credential-bearing URLs.
 
 | Stage | Scope and current status | Completion evidence |
 |---|---|---|
-| Core APIs and planograms | Next: camera/shelf CRUD, activation, Frame(0) revision/lifetime and ROI management | Credential-redacted responses, normalized polygon validation, stale-version conflicts and scoped access tests |
-| Video and vision workers | Planned: authorized proxy paths, bounded capture/reconnect, pinned pose/tracker configuration and extraction of notebook algorithms | Qualified keypoints/scale, same-arm reach rules, explicit sampling cadence, unknown handling and measured accuracy on labeled footage |
+| Core APIs and planograms | Implemented: camera/shelf management, stable reference capture, geometry versions and proxy propagation | API integration tests, worker/control tests and reproducible RTSP/ROI visual demonstration |
+| Video and vision workers | Next: bounded inference capture/reconnect, pinned pose/tracker configuration and extraction of notebook algorithms; internal proxy paths are implemented | Qualified keypoints/scale, same-arm reach rules, explicit sampling cadence, unknown handling and measured accuracy on labeled footage |
 | Temporal processing | Planned: interaction lifecycle, episodes, transaction-before-acknowledgement, deterministic redelivery handling and reconstruction | Entry/exit/loss boundary tests, supported-duration accounting, crash/rebalance fault tests and replay equivalence |
 | Analytics and live delivery | Planned: cache-first shelf rankings, coverage-aware visitors/funnels/heatmaps, WebSocket and observability | Correct window/cohort denominators, cache isolation, freshness/coverage metadata and measured latency/lag |
 | Frontend dashboard | Planned: framework selection, separate build/Compose service, playback, ROI editor and analytical views | Operator walkthroughs covering version conflicts, unavailable evidence, stale data and reconnects |

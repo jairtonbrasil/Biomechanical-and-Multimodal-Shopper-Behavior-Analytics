@@ -34,8 +34,8 @@ jobs:
 
       - name: Check source quality
         run: |
-          ruff check backend scripts
-          ruff format --check backend scripts
+          ruff check backend scripts infrastructure/demo_publish.py
+          ruff format --check backend scripts infrastructure/demo_publish.py
           python scripts/check_notebook.py
 
       - name: Run unit tests

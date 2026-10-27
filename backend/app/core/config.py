@@ -1,5 +1,8 @@
+import re
+from ipaddress import ip_network
 from pathlib import Path
 from typing import Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,7 +20,25 @@ class Settings(BaseSettings):
         frozen=True,
     )
 
-    app_environment: Literal["local", "test"] = "local"
+    app_environment: Literal["local", "test", "production"] = "local"
+    api_request_max_bytes: int = Field(default=65536, ge=1024, le=1048576)
+    api_rate_limit_per_minute: int = Field(default=240, ge=0, le=10000)
+    rtsp_allowed_networks: tuple[str, ...] = ()
+    rtsp_allowed_ports: tuple[int, ...] = (554, 8554, 322)
+    mediamtx_api_url: str = "http://mediamtx:9997"
+    mediamtx_api_password: SecretStr = Field(default="", repr=False)
+    mediamtx_read_password: SecretStr = Field(default="", repr=False)
+    mediamtx_publish_password: SecretStr = Field(default="", repr=False)
+    mediamtx_rtsp_host: str = "mediamtx"
+    mediamtx_rtsp_port: int = Field(default=8554, ge=1, le=65535)
+    configuration_poll_seconds: float = Field(default=2, ge=0.1, le=60)
+    reference_directory: Path = Path("/var/lib/shopper/references")
+    reference_timeout_seconds: float = Field(default=10, ge=1, le=30)
+    reference_job_ttl_seconds: int = Field(default=60, ge=10, le=300)
+    reference_max_bytes: int = Field(default=4194304, ge=1024, le=16777216)
+    reference_storage_limit_bytes: int = Field(default=536870912, ge=1048576)
+    reference_queue_limit: int = Field(default=32, ge=1, le=256)
+    reference_max_width: int = Field(default=1920, ge=320, le=1920)
     database_host: str = "postgres"
     database_port: int = Field(default=5432, ge=1, le=65535)
     database_name: str = "shopper_analytics"
@@ -58,6 +79,51 @@ class Settings(BaseSettings):
     def validate_state_lifetime(self) -> Self:
         if self.state_ttl_seconds * 1000 <= self.tracking_loss_tolerance_ms:
             raise ValueError("State TTL must exceed the tracking loss tolerance")
+        return self
+
+    @model_validator(mode="after")
+    def validate_operational_settings(self) -> Self:
+        networks = [ip_network(value, strict=True) for value in self.rtsp_allowed_networks]
+        origin = urlsplit(self.mediamtx_api_url)
+        if (
+            origin.scheme not in {"http", "https"}
+            or not origin.hostname
+            or origin.username is not None
+            or origin.password is not None
+            or origin.query
+            or origin.fragment
+            or origin.path not in {"", "/"}
+        ):
+            raise ValueError("Media control must use an explicit HTTP(S) origin")
+        if not self.rtsp_allowed_ports or any(
+            not 1 <= port <= 65535 for port in self.rtsp_allowed_ports
+        ):
+            raise ValueError("RTSP ports must be nonempty valid port numbers")
+        for secret in (
+            self.mediamtx_api_password,
+            self.mediamtx_read_password,
+            self.mediamtx_publish_password,
+        ):
+            value = secret.get_secret_value()
+            if value and not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", value):
+                raise ValueError("Media credentials must use 32–128 URL-safe characters")
+        if self.reference_job_ttl_seconds <= self.reference_timeout_seconds + 5:
+            raise ValueError("Reference job lifetime must exceed its capture deadline")
+        if self.app_environment == "production":
+            if not networks or not self.api_rate_limit_per_minute:
+                raise ValueError("Production requires source allowlists and quotas")
+            forbidden = (ip_network("127.0.0.0/8"), ip_network("::1/128"))
+            if any(
+                network.prefixlen == 0
+                or any(
+                    network.version == other.version and network.overlaps(other)
+                    for other in forbidden
+                )
+                for network in networks
+            ):
+                raise ValueError("Production source networks must be explicit non-loopback ranges")
+            if not self.mediamtx_api_password.get_secret_value():
+                raise ValueError("Production requires authenticated media control")
         return self
 
     @property

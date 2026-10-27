@@ -7,7 +7,7 @@ x-backend: &backend
   env_file: .env
   init: true
   networks: [services]
-  depends_on:
+  depends_on: &backend-dependencies
     migrate:
       condition: service_completed_successfully
     postgres:
@@ -108,6 +108,23 @@ services:
 
   mediamtx:
     image: bluenviron/mediamtx:1.21.2-ffmpeg
+    environment:
+      MTX_AUTHINTERNALUSERS_0_USER: any
+      MTX_AUTHINTERNALUSERS_0_IPS: 127.0.0.1,::1
+      MTX_AUTHINTERNALUSERS_0_PERMISSIONS_0_ACTION: api
+      MTX_AUTHINTERNALUSERS_1_USER: media-admin
+      MTX_AUTHINTERNALUSERS_1_PASS: ${MEDIAMTX_API_PASSWORD:?Generate media credentials}
+      MTX_AUTHINTERNALUSERS_1_PERMISSIONS_0_ACTION: api
+      MTX_AUTHINTERNALUSERS_2_USER: media-reader
+      MTX_AUTHINTERNALUSERS_2_PASS: ${MEDIAMTX_READ_PASSWORD:?Generate media credentials}
+      MTX_AUTHINTERNALUSERS_2_PERMISSIONS_0_ACTION: read
+      MTX_AUTHINTERNALUSERS_2_PERMISSIONS_0_PATH: demo/retail
+      MTX_AUTHINTERNALUSERS_2_PERMISSIONS_1_ACTION: read
+      MTX_AUTHINTERNALUSERS_2_PERMISSIONS_1_PATH: '~^cameras/[0-9a-f-]+$$'
+      MTX_AUTHINTERNALUSERS_3_USER: demo-publisher
+      MTX_AUTHINTERNALUSERS_3_PASS: ${MEDIAMTX_PUBLISH_PASSWORD:?Generate media credentials}
+      MTX_AUTHINTERNALUSERS_3_PERMISSIONS_0_ACTION: publish
+      MTX_AUTHINTERNALUSERS_3_PERMISSIONS_0_PATH: demo/retail
     volumes:
       - ./infrastructure/mediamtx.yml:/mediamtx.yml:ro
     networks: [services]
@@ -119,6 +136,12 @@ services:
 
   api:
     <<: *backend
+    depends_on:
+      <<: *backend-dependencies
+      reference-capture:
+        condition: service_started
+    volumes:
+      - reference-data:/var/lib/shopper/references:ro
     ports:
       - '127.0.0.1:${API_PORT:-8000}:8000'
     command: [uvicorn, app.main:app, --host, 0.0.0.0, --port, '8000', --no-access-log]
@@ -127,6 +150,28 @@ services:
       interval: 10s
       timeout: 12s
       retries: 10
+
+  reference-capture:
+    <<: *backend
+    build:
+      context: ./backend
+      target: capture
+    volumes:
+      - reference-data:/var/lib/shopper/references
+    command: [python, -m, workers.reference_capture.main]
+    restart: unless-stopped
+
+  demo-source:
+    <<: *backend
+    profiles: [demo]
+    build:
+      context: ./backend
+      target: capture
+    volumes:
+      - ${DEMO_VIDEO_FILE:-./notebooks/acti_retail_store_usa.mp4}:/demo/input.mp4:ro
+      - ./infrastructure/demo_publish.py:/app/demo_publish.py:ro
+    command: [python, /app/demo_publish.py]
+    restart: unless-stopped
 
   vision-worker:
     <<: *backend
@@ -155,3 +200,4 @@ networks:
 volumes:
   postgres-data:
   kafka-data:
+  reference-data:

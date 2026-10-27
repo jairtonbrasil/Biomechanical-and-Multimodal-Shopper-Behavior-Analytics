@@ -6,9 +6,16 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from redis.exceptions import RedisError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.core.config import Settings
+from app.core.references import ReferenceUnavailableError
 from app.core.resources import open_resources
+from app.middleware.limits import OperationalLimits
+from app.repositories.errors import EntityNotFoundError, InvalidReferenceError, VersionConflictError
+from app.routers.assets import router as asset_router
+from app.routers.runtime import router as runtime_router
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +30,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "Invalid application configuration; check environment settings"
             ) from None
         async with open_resources(configuration) as resources:
+            application.state.settings = configuration
             application.state.resources = resources
             yield
 
@@ -33,6 +41,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
         openapi_url=None,
     )
+    if settings is not None:
+        application.state.settings = settings
+    application.add_middleware(OperationalLimits)
+    application.include_router(asset_router)
+    application.include_router(runtime_router)
+
+    async def domain_error(request: Request, error: Exception) -> JSONResponse:
+        if isinstance(error, EntityNotFoundError):
+            code, detail = 404, "Resource does not exist"
+        elif isinstance(error, (InvalidReferenceError, VersionConflictError, IntegrityError)):
+            code, detail = 409, "Configuration conflict; reload the current state"
+        elif isinstance(error, (ReferenceUnavailableError, OperationalError, RedisError)):
+            code, detail = 503, "Requested service or reference is unavailable"
+        else:
+            code, detail = 422, "Invalid configuration"
+        return JSONResponse(status_code=code, content={"detail": detail})
+
+    for error_type in (
+        EntityNotFoundError,
+        InvalidReferenceError,
+        VersionConflictError,
+        IntegrityError,
+        ReferenceUnavailableError,
+        OperationalError,
+        RedisError,
+        ValueError,
+    ):
+        application.add_exception_handler(error_type, domain_error)
 
     @application.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, error: RequestValidationError) -> JSONResponse:

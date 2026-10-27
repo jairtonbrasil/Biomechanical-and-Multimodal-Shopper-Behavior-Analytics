@@ -74,6 +74,8 @@ async def test_partial_startup_closes_all_resources(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     resources = SimpleNamespace(
+        media=None,
+        configuration=None,
         database=SimpleNamespace(close=AsyncMock()),
         redis=SimpleNamespace(close=AsyncMock()),
         kafka=SimpleNamespace(start=AsyncMock(side_effect=RuntimeError()), close=AsyncMock()),

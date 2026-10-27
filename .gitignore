@@ -72,6 +72,7 @@ Thumbs.db
 /AGENT.md
 /PRD/
 
-# Local execution records; public operations and contracts live in docs/.
+# Local execution records
 /docs/stage-1-operations.md
 /docs/stage-1-validation.md
+/docs/*.md

@@ -42,3 +42,27 @@ def test_state_lifetime_exceeds_loss_tolerance() -> None:
             state_ttl_seconds=10,
             tracking_loss_tolerance_ms=10000,
         )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"rtsp_allowed_networks": ()},
+        {"rtsp_allowed_networks": ("0.0.0.0/0",)},
+        {"rtsp_allowed_networks": ("127.0.0.0/8",)},
+        {"rtsp_allowed_networks": ("::/0",)},
+        {"api_rate_limit_per_minute": 0},
+        {"mediamtx_api_password": ""},
+        {"reference_job_ttl_seconds": 10, "reference_timeout_seconds": 10},
+    ],
+)
+def test_production_requires_explicit_operational_boundaries(settings, changes) -> None:
+    values = {
+        **settings.model_dump(),
+        "app_environment": "production",
+        "rtsp_allowed_networks": ("192.168.10.0/24",),
+        "mediamtx_api_password": "m" * 40,
+        **changes,
+    }
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **values)

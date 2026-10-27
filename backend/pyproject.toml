@@ -17,6 +17,7 @@ dependencies = [
     "redis>=5.2,<7",
     "aiokafka>=0.12,<0.15",
     "alembic>=1.14,<2",
+    "httpx>=0.28,<1",
 ]
 
 [project.optional-dependencies]

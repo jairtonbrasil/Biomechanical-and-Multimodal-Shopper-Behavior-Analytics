@@ -1,17 +1,18 @@
-logLevel: warn
-logStructured: true
+# Media control and RTSP stay inside the Compose service network.
+logLevel: error
+logDestinations: [file]
+logFile: /dev/null
 api: true
-apiAddress: 127.0.0.1:9997
+apiAddress: :9997
 authMethod: internal
-authInternalUsers:
-  - user: any
-    ips: [127.0.0.1, '::1']
-    permissions:
-      - action: api
+# Deployment credentials and their scoped permissions are supplied through
+# MTX_AUTHINTERNALUSERS, never stored in this versioned configuration.
+authInternalUsers: []
 rtspTransports: [tcp]
 rtmp: false
 srt: false
-hls: true
-webrtc: true
-# No camera or anonymous media permissions are provisioned before D06/T037.
-paths: {}
+hls: false
+webrtc: false
+paths:
+  demo/retail:
+    source: publisher

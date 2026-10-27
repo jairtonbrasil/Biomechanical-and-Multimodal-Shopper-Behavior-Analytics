@@ -1,4 +1,4 @@
-from typing import Self
+from typing import Any, Self
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -32,6 +32,44 @@ class CameraResponse(Contract):
     is_active: bool
     created_at: AwareDatetime
     updated_at: AwareDatetime
+    configuration_revision: UUID
+    source_revision: UUID
+
+    @model_validator(mode="before")
+    @classmethod
+    def include_revision(cls, value: Any) -> Any:
+        if not isinstance(value, dict) and hasattr(value, "stream_url"):
+            from app.domain.configuration import camera_revision, source_revision
+
+            return {
+                **{
+                    name: getattr(value, name)
+                    for name in cls.model_fields
+                    if name not in {"configuration_revision", "source_revision"}
+                },
+                "configuration_revision": camera_revision(value),
+                "source_revision": source_revision(value),
+            }
+        return value
+
+
+class CameraUpdate(Contract):
+    expected_revision: UUID
+    name: Name | None = None
+    stream_url: SecretStr | None = Field(default=None, repr=False)
+    is_active: bool | None = None
+
+    @field_validator("stream_url")
+    @classmethod
+    def valid_stream(cls, value: SecretStr | None) -> SecretStr | None:
+        return CameraCreate.valid_stream(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def valid_update(self) -> Self:
+        fields = self.model_fields_set - {"expected_revision"}
+        if not fields or any(getattr(self, field) is None for field in fields):
+            raise ValueError("Supply at least one non-null update")
+        return self
 
 
 class ShelfCreate(Contract):
@@ -48,6 +86,24 @@ class GeometryUpdate(Contract):
     product_roi: ReferencedPolygon
     presence_roi: Polygon
     cutover_at: AwareDatetime
+
+
+class ShelfUpdate(Contract):
+    expected_version: int = Field(ge=1)
+    name: Name | None = None
+    category: Name | None = None
+    product_roi: ReferencedPolygon | None = None
+    presence_roi: Polygon | None = None
+    is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def valid_update(self) -> Self:
+        fields = self.model_fields_set - {"expected_version"}
+        if not fields or any(getattr(self, field) is None for field in fields):
+            raise ValueError("Supply at least one non-null update")
+        if ("product_roi" in fields) != ("presence_roi" in fields):
+            raise ValueError("Update product and presence polygons together")
+        return self
 
 
 class ShelfResponse(Contract):

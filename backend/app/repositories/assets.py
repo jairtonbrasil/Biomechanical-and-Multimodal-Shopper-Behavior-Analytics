@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from uuid import UUID
 
 from sqlalchemy import select
@@ -21,8 +23,11 @@ class CameraRepository:
         await self.session.flush()
         return camera
 
-    async def get(self, identifier: UUID) -> Camera:
-        camera = await self.session.get(Camera, identifier)
+    async def get(self, identifier: UUID, *, lock: bool = False) -> Camera:
+        statement = select(Camera).where(Camera.id == identifier)
+        if lock:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        camera = await self.session.scalar(statement)
         if camera is None:
             raise EntityNotFoundError("Camera does not exist")
         return camera
@@ -33,25 +38,82 @@ class CameraRepository:
         await self.session.flush()
         return camera
 
-    async def list(self, *, offset: int = 0, limit: int = 100) -> list[Camera]:
+    async def list(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+        camera_ids: tuple[UUID, ...] | None = None,
+        is_active: bool | None = None,
+    ) -> list[Camera]:
         if offset < 0 or not 1 <= limit <= 100:
             raise ValueError("Invalid pagination bounds")
+        statement = select(Camera)
+        if camera_ids is not None:
+            statement = statement.where(Camera.id.in_(camera_ids))
+        if is_active is not None:
+            statement = statement.where(Camera.is_active == is_active)
         return list(
-            await self.session.scalars(
-                select(Camera).order_by(Camera.id).offset(offset).limit(limit)
-            )
+            await self.session.scalars(statement.order_by(Camera.id).offset(offset).limit(limit))
         )
+
+    async def has_active_interactions(self, identifier: UUID) -> bool:
+        return (
+            await self.session.scalar(
+                select(ShelfInteraction.id)
+                .join(Shelf, Shelf.id == ShelfInteraction.shelf_id)
+                .where(Shelf.camera_id == identifier, ShelfInteraction.status == "ACTIVE")
+                .limit(1)
+            )
+        ) is not None
+
+    async def shelves(self, identifier: UUID, *, lock: bool = False) -> list[Shelf]:
+        statement = select(Shelf).where(Shelf.camera_id == identifier).order_by(Shelf.id)
+        if lock:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        return list(await self.session.scalars(statement))
 
 
 class ShelfRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def get(self, identifier: UUID) -> Shelf:
-        shelf = await self.session.get(Shelf, identifier)
+    async def get(self, identifier: UUID, *, lock: bool = False) -> Shelf:
+        statement = select(Shelf).where(Shelf.id == identifier)
+        if lock:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        shelf = await self.session.scalar(statement)
         if shelf is None:
             raise EntityNotFoundError("Shelf does not exist")
         return shelf
+
+    async def list(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+        camera_ids: tuple[UUID, ...] | None = None,
+        is_active: bool | None = None,
+    ) -> list[Shelf]:
+        if offset < 0 or not 1 <= limit <= 100:
+            raise ValueError("Invalid pagination bounds")
+        statement = select(Shelf)
+        if camera_ids is not None:
+            statement = statement.where(Shelf.camera_id.in_(camera_ids))
+        if is_active is not None:
+            statement = statement.where(Shelf.is_active == is_active)
+        return list(
+            await self.session.scalars(statement.order_by(Shelf.id).offset(offset).limit(limit))
+        )
+
+    async def has_active_interactions(self, identifier: UUID) -> bool:
+        return (
+            await self.session.scalar(
+                select(ShelfInteraction.id)
+                .where(ShelfInteraction.shelf_id == identifier, ShelfInteraction.status == "ACTIVE")
+                .limit(1)
+            )
+        ) is not None
 
     async def create(self, data: ShelfCreate) -> Shelf:
         await CameraRepository(self.session).get(data.camera_id)
